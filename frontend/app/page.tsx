@@ -74,13 +74,16 @@ const parseAnswerKey = (fileContent: string): Record<string, { subject: string; 
 
   if (Object.keys(keyMap).length === 0) {
     const spans = Array.from(doc.getElementsByTagName('span'));
-    const texts = spans.map(s => s.textContent?.trim() || '').filter(t => t !== '');
-
-    const qIndices: number[] = [];
-    for (let i = 0; i < texts.length; i++) {
-      const t = texts[i];
-      if (t.length === 12 && /^\d+$/.test(t)) {
-        qIndices.push(i);
+    const texts: string[] = [];
+    for (const s of spans) {
+      const txt = s.textContent?.trim();
+      if (txt) {
+        const parts = txt.split(/\s+/);
+        for (const p of parts) {
+          if (p) {
+            texts.push(p);
+          }
+        }
       }
     }
 
@@ -92,77 +95,76 @@ const parseAnswerKey = (fileContent: string): Record<string, { subject: string; 
       fallbackSubject: string;
     }
     const tempQuestions: TempQuestion[] = [];
+    let currentCode: string | null = null;
 
-    for (const qIdx of qIndices) {
-      const qId = texts[qIdx];
-      const options: string[] = [];
-      let correctOption = '';
-
-      let idx = qIdx + 1;
-      while (idx < Math.min(qIdx + 15, texts.length)) {
-        const t = texts[idx];
-        if (t.length === 13 && /^\d+$/.test(t)) {
-          options.push(t);
-        } else if (t.toLowerCase().startsWith('drop')) {
-          correctOption = 'Dropped';
+    let idx = 0;
+    while (idx < texts.length) {
+      const t = texts[idx];
+      const codeMatch = t.match(/^(10[1-9]|1[1-9][0-9]|[234][0-9]{2}|501)$/);
+      if (codeMatch) {
+        const candidateCode = codeMatch[1];
+        let isValidCode = false;
+        if (idx + 1 < texts.length && texts[idx + 1] === "-") {
+          isValidCode = true;
         }
-        idx++;
-      }
 
-      if (options.length > 0) {
-        correctOption = options[0];
-      }
+        if (isValidCode) {
+          const subjectParts: string[] = [];
+          let j = idx + 2;
+          while (j < Math.min(idx + 15, texts.length)) {
+            const nextT = texts[j];
+            if (/\d/.test(nextT)) {
+              break;
+            }
+            if (['sno', 'question', 'correct', 'option(s)', 'answer', 'key'].includes(nextT.toLowerCase())) {
+              break;
+            }
+            subjectParts.push(nextT);
+            j++;
+          }
 
-      if (!correctOption || (correctOption.length !== 13 && correctOption !== 'Dropped')) {
-        continue;
-      }
+          let subjectName = subjectParts.join(' ').trim();
+          subjectName = subjectName.replace(/^\s*[-–]\s*/, '').trim();
+          subjectName = subjectName.replace(/\s*[-–]\s*$/, '').trim();
+          subjectName = subjectName.replace(/\(Domain\).*$/, '(Domain)').trim();
 
-      const subjectParts: string[] = [];
-      let prevIdx = qIdx - 1;
-      while (prevIdx >= 0) {
-        const t = texts[prevIdx];
-        if (t.length === 13 && /^\d+$/.test(t)) {
-          break;
-        }
-        if (/^\d+$/.test(t)) {
-          const num = parseInt(t, 10);
-          if (num < 100) {
-            break;
+          if (subjectName && subjectName.length > 3 && !subjectName.toLowerCase().includes('none of these')) {
+            currentCode = candidateCode;
+            const currentBest = codeToName[currentCode] || '';
+            if (subjectName.length > currentBest.length) {
+              codeToName[currentCode] = subjectName;
+            }
           }
         }
-        if (['sno', 'question no', 'correct', 'option(s)'].includes(t.toLowerCase())) {
-          break;
+      } else if (t.length === 12 && /^\d+$/.test(t)) {
+        const qId = t;
+        const options: string[] = [];
+        let correctOption = '';
+        let k = idx + 1;
+        while (k < Math.min(idx + 15, texts.length)) {
+          const nextT = texts[k];
+          if (nextT.length === 13 && /^\d+$/.test(nextT)) {
+            options.push(nextT);
+          } else if (nextT.toLowerCase().startsWith('drop')) {
+            correctOption = 'Dropped';
+          }
+          k++;
         }
-        subjectParts.unshift(t);
-        prevIdx--;
-      }
 
-      const subjectRaw = subjectParts.join(' ').trim();
-      const codeRegex = /\b(10[1-9]|1[1-9][0-9]|[234][0-9]{2}|501)\b/;
-      const codeMatch = subjectRaw.match(codeRegex);
-      const subjectCode = codeMatch ? codeMatch[1] : null;
+        if (options.length > 0) {
+          correctOption = options[0];
+        }
 
-      let nameCandidate = subjectRaw;
-      if (subjectCode) {
-        nameCandidate = nameCandidate.replace(new RegExp(`\\b${subjectCode}\\b`), '');
-      }
-      nameCandidate = nameCandidate.replace(/^\s*[-–]\s*/, '').trim();
-      nameCandidate = nameCandidate.replace(/\s*[-–]\s*$/, '').trim();
-      nameCandidate = nameCandidate.replace(/\(Domain\).*$/, '(Domain)').trim();
-
-      if (subjectCode && nameCandidate) {
-        const currentBest = codeToName[subjectCode] || '';
-        if (nameCandidate.length > currentBest.length && !nameCandidate.toLowerCase().includes('none of these')) {
-          codeToName[subjectCode] = nameCandidate;
+        if (correctOption && (correctOption.length === 13 || correctOption === 'Dropped')) {
+          tempQuestions.push({
+            qId,
+            correctOptionId: correctOption,
+            subjectCode: currentCode,
+            fallbackSubject: (currentCode && codeToName[currentCode]) ? codeToName[currentCode] : 'Unknown'
+          });
         }
       }
-
-      tempQuestions.push({
-        qId,
-        correctOptionId: correctOption,
-        subjectCode,
-        fallbackSubject: nameCandidate || 'Unknown'
-      });
+      idx++;
     }
 
     for (const q of tempQuestions) {
