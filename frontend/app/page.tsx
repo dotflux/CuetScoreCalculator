@@ -72,6 +72,110 @@ const parseAnswerKey = (fileContent: string): Record<string, { subject: string; 
     }
   }
 
+  if (Object.keys(keyMap).length === 0) {
+    const spans = Array.from(doc.getElementsByTagName('span'));
+    const texts = spans.map(s => s.textContent?.trim() || '').filter(t => t !== '');
+
+    const qIndices: number[] = [];
+    for (let i = 0; i < texts.length; i++) {
+      const t = texts[i];
+      if (t.length === 12 && /^\d+$/.test(t)) {
+        qIndices.push(i);
+      }
+    }
+
+    const codeToName: Record<string, string> = {};
+    interface TempQuestion {
+      qId: string;
+      correctOptionId: string;
+      subjectCode: string | null;
+      fallbackSubject: string;
+    }
+    const tempQuestions: TempQuestion[] = [];
+
+    for (const qIdx of qIndices) {
+      const qId = texts[qIdx];
+      const options: string[] = [];
+      let correctOption = '';
+
+      let idx = qIdx + 1;
+      while (idx < Math.min(qIdx + 15, texts.length)) {
+        const t = texts[idx];
+        if (t.length === 13 && /^\d+$/.test(t)) {
+          options.push(t);
+        } else if (t.toLowerCase().startsWith('drop')) {
+          correctOption = 'Dropped';
+        }
+        idx++;
+      }
+
+      if (options.length > 0) {
+        correctOption = options[0];
+      }
+
+      if (!correctOption || (correctOption.length !== 13 && correctOption !== 'Dropped')) {
+        continue;
+      }
+
+      const subjectParts: string[] = [];
+      let prevIdx = qIdx - 1;
+      while (prevIdx >= 0) {
+        const t = texts[prevIdx];
+        if (t.length === 13 && /^\d+$/.test(t)) {
+          break;
+        }
+        if (/^\d+$/.test(t)) {
+          const num = parseInt(t, 10);
+          if (num < 100) {
+            break;
+          }
+        }
+        if (['sno', 'question no', 'correct', 'option(s)'].includes(t.toLowerCase())) {
+          break;
+        }
+        subjectParts.unshift(t);
+        prevIdx--;
+      }
+
+      const subjectRaw = subjectParts.join(' ').trim();
+      const codeRegex = /\b(10[1-9]|1[1-9][0-9]|[234][0-9]{2}|501)\b/;
+      const codeMatch = subjectRaw.match(codeRegex);
+      const subjectCode = codeMatch ? codeMatch[1] : null;
+
+      let nameCandidate = subjectRaw;
+      if (subjectCode) {
+        nameCandidate = nameCandidate.replace(new RegExp(`\\b${subjectCode}\\b`), '');
+      }
+      nameCandidate = nameCandidate.replace(/^\s*[-–]\s*/, '').trim();
+      nameCandidate = nameCandidate.replace(/\s*[-–]\s*$/, '').trim();
+      nameCandidate = nameCandidate.replace(/\(Domain\).*$/, '(Domain)').trim();
+
+      if (subjectCode && nameCandidate) {
+        const currentBest = codeToName[subjectCode] || '';
+        if (nameCandidate.length > currentBest.length && !nameCandidate.toLowerCase().includes('none of these')) {
+          codeToName[subjectCode] = nameCandidate;
+        }
+      }
+
+      tempQuestions.push({
+        qId,
+        correctOptionId: correctOption,
+        subjectCode,
+        fallbackSubject: nameCandidate || 'Unknown'
+      });
+    }
+
+    for (const q of tempQuestions) {
+      const code = q.subjectCode;
+      const rawSubject = (code && codeToName[code]) ? codeToName[code] : q.fallbackSubject;
+      const subject = cleanSubjectName(rawSubject);
+      keyMap[q.qId] = {
+        subject,
+        correctOptionId: q.correctOptionId
+      };
+    }
+  }
+
   return keyMap;
 };
 
