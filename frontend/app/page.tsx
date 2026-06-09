@@ -35,69 +35,168 @@ const cleanSubjectName = (raw: string): string => {
 const parseAnswerKey = (fileContent: string): Record<string, { subject: string; correctOptionId: string }> => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(fileContent, 'text/html');
-  const spans = Array.from(doc.getElementsByTagName('span'));
-  const subjectSpans = spans.filter(s => s.id && s.id.toLowerCase().endsWith('lblsubject'));
-  const qnoSpans = spans.filter(s => s.id && s.id.toLowerCase().endsWith('lbl_questionno'));
-  const ranswerSpans = spans.filter(s => s.id && s.id.toLowerCase().endsWith('lbl_ranswer'));
-
   const keyMap: Record<string, { subject: string; correctOptionId: string }> = {};
-  const minLen = Math.min(subjectSpans.length, qnoSpans.length, ranswerSpans.length);
 
-  for (let i = 0; i < minLen; i++) {
-    const subjectRaw = subjectSpans[i].textContent?.trim() || '';
-    const questionId = qnoSpans[i].textContent?.trim() || '';
-    const correctOptionId = ranswerSpans[i].textContent?.trim() || '';
-    const subject = cleanSubjectName(subjectRaw);
-    if (subject && questionId) {
-      keyMap[questionId] = { subject, correctOptionId };
+  const rows = Array.from(doc.getElementsByTagName('tr'));
+  for (const row of rows) {
+    const subjectSpan = row.querySelector('span[id$="lblSubject" i], span[id$="lblsubject" i]');
+    const qnoSpan = row.querySelector('span[id$="lbl_QuestionNo" i], span[id$="lbl_questionno" i]');
+    const ranswerSpan = row.querySelector('span[id$="lbl_RAnswer" i], span[id$="lbl_ranswer" i]');
+    
+    if (qnoSpan && ranswerSpan) {
+      const subjectRaw = subjectSpan?.textContent?.trim() || '';
+      const questionId = qnoSpan.textContent?.trim() || '';
+      const correctOptionId = ranswerSpan.textContent?.trim() || '';
+      const subject = cleanSubjectName(subjectRaw);
+      if (subject && questionId) {
+        keyMap[questionId] = { subject, correctOptionId };
+      }
     }
   }
+
+  if (Object.keys(keyMap).length === 0) {
+    const spans = Array.from(doc.getElementsByTagName('span'));
+    const subjectSpans = spans.filter(s => s.id && s.id.toLowerCase().endsWith('lblsubject'));
+    const qnoSpans = spans.filter(s => s.id && s.id.toLowerCase().endsWith('lbl_questionno'));
+    const ranswerSpans = spans.filter(s => s.id && s.id.toLowerCase().endsWith('lbl_ranswer'));
+
+    const minLen = Math.min(subjectSpans.length, qnoSpans.length, ranswerSpans.length);
+    for (let i = 0; i < minLen; i++) {
+      const subjectRaw = subjectSpans[i].textContent?.trim() || '';
+      const questionId = qnoSpans[i].textContent?.trim() || '';
+      const correctOptionId = ranswerSpans[i].textContent?.trim() || '';
+      const subject = cleanSubjectName(subjectRaw);
+      if (subject && questionId) {
+        keyMap[questionId] = { subject, correctOptionId };
+      }
+    }
+  }
+
   return keyMap;
 };
 
 const parseResponseSheet = (fileContent: string): Record<string, any> => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(fileContent, 'text/html');
-  const questionPanels = Array.from(doc.getElementsByClassName('question-pnl'));
   const responses: Record<string, any> = {};
 
-  for (const panel of questionPanels) {
-    const menuTbl = panel.querySelector('table.menu-tbl');
-    if (!menuTbl) continue;
-
-    const qNumTd = panel.querySelector('td.bold[valign="top"][align="center"]');
-    const qNumber = qNumTd ? qNumTd.textContent?.trim() || '' : '';
-
-    const rows = Array.from(menuTbl.querySelectorAll('tr'));
-    const data: Record<string, string> = {};
-    for (const row of rows) {
-      const tds = Array.from(row.querySelectorAll('td'));
-      if (tds.length === 2) {
-        const key = (tds[0].textContent || '').trim().replace(/:$/, '').trim();
-        const val = (tds[1].textContent || '').trim();
-        data[key] = val;
+  const getValueByFlexKey = (obj: Record<string, string>, searchKey: string): string => {
+    const normalizedSearch = searchKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (const [k, v] of Object.entries(obj)) {
+      if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === normalizedSearch) {
+        return v;
       }
     }
+    return '';
+  };
 
-    const questionId = data['Question ID'] || '';
-    const status = data['Status'] || '';
-    const chosenOptionNum = (data['Chosen Option'] || '').trim();
+  const questionPanels = Array.from(doc.getElementsByClassName('question-pnl'));
+  
+  if (questionPanels.length > 0) {
+    for (const panel of questionPanels) {
+      const menuTbl = panel.querySelector('table.menu-tbl') || panel.querySelector('table');
+      if (!menuTbl) continue;
 
-    const optionIds: Record<number, string> = {};
-    for (let i = 1; i <= 4; i++) {
-      const optKey = `Option ${i} ID`;
-      if (data[optKey]) {
-        optionIds[i] = data[optKey];
+      const qNumTd = panel.querySelector('td.bold[valign="top"][align="center"]') || panel.querySelector('td.bold');
+      const qNumber = qNumTd ? qNumTd.textContent?.trim() || '' : '';
+
+      const rows = Array.from(menuTbl.querySelectorAll('tr'));
+      const data: Record<string, string> = {};
+      for (const row of rows) {
+        const tds = Array.from(row.querySelectorAll('td'));
+        if (tds.length === 2) {
+          const key = (tds[0].textContent || '').trim().replace(/:$/, '').trim();
+          const val = (tds[1].textContent || '').trim();
+          data[key] = val;
+        }
+      }
+
+      const questionId = getValueByFlexKey(data, 'Question ID');
+      const status = getValueByFlexKey(data, 'Status');
+      const chosenOptionNum = getValueByFlexKey(data, 'Chosen Option').trim();
+
+      const optionIds: Record<number, string> = {};
+      for (let i = 1; i <= 4; i++) {
+        const val = getValueByFlexKey(data, `Option ${i} ID`);
+        if (val) {
+          optionIds[i] = val;
+        }
+      }
+
+      let chosenOptionId: string | null = null;
+      if (chosenOptionNum && /^\d+$/.test(chosenOptionNum)) {
+        const num = parseInt(chosenOptionNum, 10);
+        chosenOptionId = optionIds[num] || null;
+      }
+
+      if (questionId) {
+        responses[questionId] = {
+          status,
+          chosenOptionNum,
+          chosenOptionId,
+          optionIds,
+          qNumber
+        };
       }
     }
+  }
 
-    let chosenOptionId: string | null = null;
-    if (chosenOptionNum && /^\d+$/.test(chosenOptionNum)) {
-      const num = parseInt(chosenOptionNum, 10);
-      chosenOptionId = optionIds[num] || null;
-    }
+  if (Object.keys(responses).length === 0) {
+    const allTables = Array.from(doc.getElementsByTagName('table'));
+    const candidateTables = allTables.filter(tbl => {
+      const text = tbl.textContent || '';
+      return text.toLowerCase().includes('question id') || text.toLowerCase().includes('questionid');
+    });
 
-    if (questionId) {
+    for (const table of candidateTables) {
+      const rows = Array.from(table.querySelectorAll('tr'));
+      const data: Record<string, string> = {};
+      for (const row of rows) {
+        const tds = Array.from(row.querySelectorAll('td'));
+        if (tds.length === 2) {
+          const key = (tds[0].textContent || '').trim().replace(/:$/, '').trim();
+          const val = (tds[1].textContent || '').trim();
+          data[key] = val;
+        }
+      }
+
+      const questionId = getValueByFlexKey(data, 'Question ID');
+      if (!questionId) continue;
+
+      const status = getValueByFlexKey(data, 'Status');
+      const chosenOptionNum = getValueByFlexKey(data, 'Chosen Option').trim();
+
+      const optionIds: Record<number, string> = {};
+      for (let i = 1; i <= 4; i++) {
+        const val = getValueByFlexKey(data, `Option ${i} ID`);
+        if (val) {
+          optionIds[i] = val;
+        }
+      }
+
+      let chosenOptionId: string | null = null;
+      if (chosenOptionNum && /^\d+$/.test(chosenOptionNum)) {
+        const num = parseInt(chosenOptionNum, 10);
+        chosenOptionId = optionIds[num] || null;
+      }
+
+      let qNumber = '';
+      let parent = table.parentElement;
+      while (parent && !qNumber) {
+        const qNumTd = parent.querySelector('td.bold[valign="top"][align="center"]') || parent.querySelector('td.bold');
+        if (qNumTd) {
+          qNumber = qNumTd.textContent?.trim() || '';
+          break;
+        }
+        const text = parent.textContent || '';
+        const match = text.match(/Q\.\s*(\d+)/i);
+        if (match) {
+          qNumber = 'Q.' + match[1];
+          break;
+        }
+        parent = parent.parentElement;
+      }
+
       responses[questionId] = {
         status,
         chosenOptionNum,
@@ -282,6 +381,37 @@ export default function Home() {
 
         const answerKey = parseAnswerKey(answerKeyHtml);
         const responses = parseResponseSheet(responseHtml);
+
+        const answerKeyCount = Object.keys(answerKey).length;
+        const responseCount = Object.keys(responses).length;
+
+        if (answerKeyCount === 0) {
+          throw new Error(
+            `Unable to parse any questions from the Answer Key file ("${session.answerKeyFile.name}"). ` +
+            `Please make sure it is the correct HTML file containing the official answer key page.`
+          );
+        }
+
+        if (responseCount === 0) {
+          throw new Error(
+            `Unable to parse any questions from the Response Sheet file ("${session.responseFile.name}"). ` +
+            `Please make sure it is the correct HTML file and not a PDF, image, or raw login/error page.`
+          );
+        }
+
+        let overlapCount = 0;
+        for (const qId of Object.keys(answerKey)) {
+          if (responses[qId]) {
+            overlapCount++;
+          }
+        }
+
+        if (overlapCount === 0) {
+          throw new Error(
+            `Found ${answerKeyCount} keys and ${responseCount} response questions, but they have 0 matching Question IDs. ` +
+            `Please verify you uploaded the matching Answer Key and Response Sheet for this session.`
+          );
+        }
 
         for (const [questionId, ansData] of Object.entries(answerKey)) {
           const subject = ansData.subject;
